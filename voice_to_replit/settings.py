@@ -1,0 +1,94 @@
+"""User settings stored in %APPDATA%\\VoiceToReplit\\settings.json."""
+import copy
+import json
+import logging
+
+from .paths import SETTINGS_FILE, ensure_dirs
+
+log = logging.getLogger(__name__)
+
+DEFAULT_SYSTEM_PROMPT = """You turn a user's spoken, rambling request into a clean prompt for the Replit Agent (an AI that builds and edits web apps).
+
+Rules:
+1. Write one numbered item (1., 2., 3., ...) per DIFFERENT action the speaker asked for. If they asked for one thing, output exactly one item.
+2. Never repeat or rephrase the same action as a second item. Each item must ask for something the other items do not.
+3. "Change X from A to B" is ONE action: write it as one item that changes X to B. The old value A is not a separate instruction.
+4. Remove filler words ("um", "uh", "like", "you know", "so", "basically"), repetitions and false starts. If the speaker corrects themselves ("red, no wait, green"), keep only the correction.
+5. Keep EVERY concrete detail the speaker mentions: element names, page names, colours, positions, sizes, numbers, exact text/labels, file names and technologies. Put exact text the user wants shown in double quotes.
+6. Never invent features, details, steps or requirements the speaker did not say (no "remove", "test", "verify", "make sure" unless they said it). No suggestions or explanations.
+7. Write short imperative sentences addressed to the Replit Agent (e.g. "Change the header background to dark blue.").
+8. Output ONLY the numbered list. No preamble, title, closing remarks or markdown code fences."""
+
+# Earlier built-in prompts; a saved copy of one of these is upgraded to the current default.
+OLD_SYSTEM_PROMPTS = [
+    """You turn a user's spoken, rambling request into a clean prompt for the Replit Agent (an AI that builds and edits web apps).
+
+Rules:
+1. Write one numbered item (1., 2., 3., ...) per DIFFERENT action the speaker asked for. If they asked for one thing, output exactly one item.
+2. Never repeat or rephrase the same action as a second item. Each item must ask for something the other items do not.
+3. Remove filler words ("um", "uh", "like", "you know", "so", "basically"), repetitions and false starts. If the speaker corrects themselves ("red, no wait, green"), keep only the correction.
+4. Keep EVERY concrete detail the speaker mentions: element names, page names, colours, positions, sizes, numbers, exact text/labels, file names and technologies. Put exact text the user wants shown in double quotes.
+5. Never invent features, details, steps or requirements the speaker did not say. No suggestions, explanations, testing steps or best practices.
+6. Write short imperative sentences addressed to the Replit Agent (e.g. "Change the header background to dark blue.").
+7. Output ONLY the numbered list. No preamble, title, closing remarks or markdown code fences.""",
+    """You rewrite a user's spoken, rambling instructions into a clean prompt for the Replit Agent (an AI that builds and edits web apps).
+
+Rules:
+1. Rewrite the speech into clear, concise, numbered instructions (1., 2., 3., ...). One action per item.
+2. Remove filler words ("um", "uh", "like", "you know", "so", "basically"), repetitions and false starts. If the speaker corrects themselves, keep only the corrected version.
+3. Keep EVERY concrete detail the speaker mentions: element names, page names, colours, positions, sizes, numbers, exact text/labels, file names and technologies.
+4. Never invent features, details, or requirements the speaker did not say. Do not add suggestions, explanations, or best practices.
+5. Write in the imperative, addressed to the Replit Agent (e.g. "Change the header background to dark blue.").
+6. Output ONLY the final numbered instructions. No preamble, no title, no closing remarks, no quotes, no markdown code fences.""",
+]
+
+DEFAULTS = {
+    "hotkey": "<ctrl>+<shift>+x",
+    "whisper_model": "small",
+    "whisper_device": "auto",  # auto | cuda | cpu
+    "ollama_model": "llama3.2",
+    "ollama_url": "http://127.0.0.1:11434",
+    "system_prompt": DEFAULT_SYSTEM_PROMPT,
+    "microphone": "",  # empty = system default input device
+    "auto_enter": True,
+    "chat_position": None,  # {"x", "y", "window_rect": [l, t, r, b], "window_title"}
+    "start_with_windows": False,
+    "training_log": False,  # save transcripts, rewrites and confirmed prompts locally (opt-in)
+}
+
+
+class Settings:
+    def __init__(self, data: dict | None = None):
+        self.data = copy.deepcopy(DEFAULTS)
+        if data:
+            self.data.update({k: v for k, v in data.items() if k in DEFAULTS})
+        if self.data["system_prompt"].strip() in (p.strip() for p in OLD_SYSTEM_PROMPTS):
+            self.data["system_prompt"] = DEFAULT_SYSTEM_PROMPT
+
+    @classmethod
+    def load(cls) -> "Settings":
+        ensure_dirs()
+        if SETTINGS_FILE.exists():
+            try:
+                return cls(json.loads(SETTINGS_FILE.read_text(encoding="utf-8")))
+            except Exception:
+                log.exception("settings.json is corrupt; using defaults (old file kept as .bak)")
+                SETTINGS_FILE.replace(SETTINGS_FILE.with_suffix(".json.bak"))
+        s = cls()
+        s.save()
+        return s
+
+    def save(self) -> None:
+        ensure_dirs()
+        tmp = SETTINGS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self.data, indent=2), encoding="utf-8")
+        tmp.replace(SETTINGS_FILE)
+
+    def __getitem__(self, key):
+        return self.data[key]
+
+    def __setitem__(self, key, value):
+        self.data[key] = value
+
+    def get(self, key, default=None):
+        return self.data.get(key, default)
