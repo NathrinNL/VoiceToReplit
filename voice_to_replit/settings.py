@@ -87,7 +87,9 @@ DEFAULTS = {
     "hotkey": "<ctrl>+<shift>+x",
     "whisper_model": "small",
     "whisper_device": "auto",  # auto | cuda | cpu
-    "ollama_model": "llama3.2",
+    "llm_mode": "local",  # "local" = only local models via Ollama on localhost; "cloud" = Ollama :cloud models
+    "ollama_model": "llama3.2",  # model used in Local mode
+    "ollama_cloud_model": "",  # model used in Cloud mode
     "temperature": 0.2,  # rewriting creativity: 0 = most literal
     "ollama_url": "http://127.0.0.1:11434",
     "system_prompt": DEFAULT_SYSTEM_PROMPT,
@@ -134,3 +136,12 @@ class Settings:
 
     def get(self, key, default=None):
         return self.data.get(key, default)
+
+    @property
+    def cloud(self) -> bool:
+        return self.data["llm_mode"] == "cloud"
+
+    @property
+    def active_model(self) -> str:
+        """The Ollama model to use for rewriting in the current Local/Cloud mode."""
+        return self.data["ollama_cloud_model"] if self.cloud else self.data["ollama_model"]

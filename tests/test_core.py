@@ -97,6 +97,44 @@ class WindowTitleTests(unittest.TestCase):
         self.assertFalse(_is_replit_title("Replit Docs: Agent overview - Google Chrome"))
 
 
+class LocalCloudTests(unittest.TestCase):
+    def test_cloud_model_names(self):
+        from voice_to_replit.llm import is_cloud_model
+        for n in ("glm-5.3-flash:cloud", "kimi-k3:cloud", "gpt-oss:120b-cloud"):
+            self.assertTrue(is_cloud_model(n), n)
+        for n in ("llama3.2", "qwen3.5:4b", "llama3.2:latest", "cloudy-model:3b"):
+            self.assertFalse(is_cloud_model(n), n)
+
+    def test_local_urls(self):
+        from voice_to_replit.llm import is_local_url
+        self.assertTrue(is_local_url("http://127.0.0.1:11434"))
+        self.assertTrue(is_local_url("http://localhost:11434"))
+        self.assertTrue(is_local_url("http://[::1]:11434"))
+        self.assertFalse(is_local_url("http://192.168.1.20:11434"))
+        self.assertFalse(is_local_url("https://ollama.com"))
+
+    def test_local_mode_never_touches_network(self):
+        """In Local mode, a cloud model or a non-localhost Ollama is refused before any request is made."""
+        from unittest import mock
+
+        from voice_to_replit.llm import Ollama, OllamaError
+
+        def boom(*a, **k):
+            raise AssertionError("network used in Local mode")
+
+        with mock.patch("requests.get", boom), mock.patch("requests.post", boom):
+            with self.assertRaisesRegex(OllamaError, "cloud model"):
+                Ollama().rewrite("hi", "glm-5.3-flash:cloud", "p", cloud=False)
+            with self.assertRaisesRegex(OllamaError, "only talks to Ollama on this computer"):
+                Ollama("https://remote.example.com").rewrite("hi", "llama3.2", "p", cloud=False)
+
+    def test_active_model_follows_mode(self):
+        s = Settings({"ollama_model": "llama3.2", "ollama_cloud_model": "kimi-k3:cloud"})
+        self.assertEqual((s.cloud, s.active_model), (False, "llama3.2"))
+        s["llm_mode"] = "cloud"
+        self.assertEqual((s.cloud, s.active_model), (True, "kimi-k3:cloud"))
+
+
 class SettingsTests(unittest.TestCase):
     def test_old_default_prompt_is_upgraded(self):
         s = Settings({"system_prompt": OLD_SYSTEM_PROMPTS[0]})
@@ -110,7 +148,7 @@ class SettingsTests(unittest.TestCase):
 
     def test_defaults(self):
         s = Settings()
-        self.assertEqual((s["ollama_model"], s["temperature"]), ("llama3.2", 0.2))
+        self.assertEqual((s["ollama_model"], s["temperature"], s["llm_mode"]), ("llama3.2", 0.2, "local"))
         for part in ("Goal:", "Features:", "Tech/Constraints:", "Notes:", "Example 1", "Example 2"):
             self.assertIn(part, s["system_prompt"])
 

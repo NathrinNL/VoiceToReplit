@@ -81,15 +81,25 @@ class SelfTest:
                 f"transcribe {time.time() - t0:.2f}s: {text!r}")
 
     def stage_ollama(self):
+        model = self.s.active_model
+        if not self.s.cloud:
+            self.ollama.check_local_only()
         self.ollama.ensure_running()
-        if not self.ollama.has_model(self.s["ollama_model"]):
-            raise RuntimeError(f"Model '{self.s['ollama_model']}' missing. Run: ollama pull {self.s['ollama_model']}")
-        return f"running, model '{self.s['ollama_model']}' available"
+        if not model:
+            raise RuntimeError("Cloud mode is on but no cloud model is chosen (Settings).")
+        if not self.ollama.has_model(model):
+            raise RuntimeError(f"Model '{model}' missing. Run: ollama pull {model}")
+        if self.s.cloud:
+            ok, who = self.ollama.signed_in()
+            if not ok:
+                raise RuntimeError("Cloud mode: not signed in to Ollama. Run: ollama signin")
+            return f"running, cloud model '{model}', signed in as {who or 'your account'}"
+        return f"running locally, model '{model}' available"
 
     def stage_rewrite(self):
         t0 = time.time()
-        out = self.ollama.rewrite(SAMPLE_TRANSCRIPT, self.s["ollama_model"], self.s["system_prompt"],
-                                  self.s["temperature"])
+        out = self.ollama.rewrite(SAMPLE_TRANSCRIPT, self.s.active_model, self.s["system_prompt"],
+                                  self.s["temperature"], self.s.cloud)
         low = out.lower()
         problems = []
         uses_template = "Goal:" in self.s["system_prompt"]
@@ -163,7 +173,8 @@ class SelfTest:
 
     def run(self, only: list[str] | None = None) -> int:
         stages = only or STAGES
-        print(f"\nVoice to Replit self-test  (Whisper={self.s['whisper_model']}, Ollama={self.s['ollama_model']})\n")
+        print(f"\nVoice to Replit self-test  (Whisper={self.s['whisper_model']}, Ollama={self.s.active_model}, "
+              f"mode={self.s['llm_mode']})\n")
         failed = []
         for name in stages:
             t0 = time.time()

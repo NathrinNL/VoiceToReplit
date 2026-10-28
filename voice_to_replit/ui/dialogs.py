@@ -193,7 +193,11 @@ class SystemCheckWindow:
         threading.Thread(target=self._run, daemon=True).start()
 
     def _run(self):
-        rep = self.syscheck.run_checks(self.settings["ollama_url"], self.settings["ollama_model"])
+        from ..llm import is_local_url
+        url = self.settings["ollama_url"]
+        if not self.settings.cloud and not is_local_url(url):
+            url = "http://127.0.0.1:11434"  # Local mode only ever checks Ollama on this computer
+        rep = self.syscheck.run_checks(url, self.settings["ollama_model"])
         self.syscheck.save_report(rep)
         self.win.after(0, self._show, rep)
 

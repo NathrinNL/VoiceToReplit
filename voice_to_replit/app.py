@@ -10,7 +10,7 @@ import pystray
 from pynput import keyboard
 
 from . import APP_NAME, audio, hotkey, history, sender, training, winutil
-from .llm import Ollama, OllamaError
+from .llm import Ollama, OllamaError, is_cloud_model
 from .settings import Settings
 from .stt import Transcriber, TranscriptionError
 from .ui import dialogs, icon, theme
@@ -185,7 +185,7 @@ class App:
             if record:
                 record.transcript = transcript
             self.post(self.overlay.show, "Rewriting prompt...", "busy")
-            prompt = self.ollama.rewrite(transcript, s["ollama_model"], s["system_prompt"], s["temperature"])
+            prompt = self.ollama.rewrite(transcript, s.active_model, s["system_prompt"], s["temperature"], s.cloud)
             if record:
                 record.add_rewrite(prompt)
             self.post(self._processed, transcript, prompt, None, record)
@@ -247,7 +247,7 @@ class App:
         def work():
             try:
                 s = self.settings
-                p = self.ollama.rewrite(rw.transcript, s["ollama_model"], s["system_prompt"], s["temperature"])
+                p = self.ollama.rewrite(rw.transcript, s.active_model, s["system_prompt"], s["temperature"], s.cloud)
                 if rw.record:
                     rw.record.add_rewrite(p)
                 self.post(lambda: rw.alive and (rw.set_prompt(p), rw.set_busy(False)))
@@ -392,12 +392,21 @@ class App:
         s = self.settings
         self.post(self.set_status, "Loading models...", "busy")
         problems = []
+        model = s.active_model
         try:
+            if not s.cloud:
+                self.ollama.check_local_only()
             self.ollama.ensure_running()
-            if not self.ollama.has_model(s["ollama_model"]):
-                problems.append(f"Ollama model '{s['ollama_model']}' is missing. Run:  ollama pull {s['ollama_model']}")
+            if not model:
+                problems.append("No cloud model chosen. Open Settings and pick one, or switch back to Local.")
+            elif not s.cloud and is_cloud_model(model):
+                problems.append(f"'{model}' is a cloud model but Local mode is on. Pick a local model in Settings.")
+            elif not self.ollama.has_model(model):
+                problems.append(f"Ollama model '{model}' is missing. Run:  ollama pull {model}")
+            elif s.cloud:
+                self.ollama.unload(s["ollama_model"])  # free the GPU; nothing to preload for a cloud model
             else:
-                self.ollama.warm_up(s["ollama_model"])
+                self.ollama.warm_up(model)
         except Exception as e:
             problems.append(str(e))
         try:
@@ -409,7 +418,8 @@ class App:
             self.post(self.error, "\n\n".join(problems))
         else:
             dev = "GPU" if self.transcriber.device == "cuda" else "CPU"
-            self.post(self.set_status, f"Ready ({dev}) - hold {hotkey.pretty(s['hotkey'])}")
+            where = "CLOUD rewriting" if s.cloud else dev
+            self.post(self.set_status, f"Ready ({where}) - hold {hotkey.pretty(s['hotkey'])}")
 
     def quit(self):
         log.info("Quitting")
@@ -420,7 +430,8 @@ class App:
             self.ptt.stop()
         if self.recorder.recording:
             self.recorder.stop()
-        threading.Thread(target=self.ollama.unload, args=(self.settings["ollama_model"],), daemon=True).start()
+        if not self.settings.cloud:
+            threading.Thread(target=self.ollama.unload, args=(self.settings["ollama_model"],), daemon=True).start()
         if self.tray:
             self.tray.stop()
         self.root.after(300, self.root.destroy)

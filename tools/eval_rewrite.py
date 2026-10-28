@@ -17,7 +17,7 @@ from pathlib import Path
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from voice_to_replit.llm import Ollama  # noqa: E402
+from voice_to_replit.llm import Ollama, is_cloud_model  # noqa: E402
 from voice_to_replit.settings import Settings  # noqa: E402
 
 CASES = [
@@ -82,19 +82,20 @@ def main():
     ap.add_argument("--json", help="write raw results to this file")
     args = ap.parse_args()
     s = Settings.load()
-    models = args.models or [s["ollama_model"]]
+    models = args.models or [s.active_model]
     o = Ollama(s["ollama_url"])
     o.ensure_running()
     results = {}
     for model in models:
-        o.rewrite("warm up", model, s["system_prompt"], s["temperature"])
+        cloud = is_cloud_model(model)  # passing a :cloud model name is an explicit opt-in to cloud
+        o.rewrite("warm up", model, s["system_prompt"], s["temperature"], cloud)
         res = {"cases": [], "passed": 0, "total": 0, "seconds": 0.0}
         print(f"\n===== {model} =====")
         for case in CASES:
             outs = []
             for _ in range(args.runs):
                 t0 = time.time()
-                out = o.rewrite(case["transcript"], model, s["system_prompt"], s["temperature"])
+                out = o.rewrite(case["transcript"], model, s["system_prompt"], s["temperature"], cloud)
                 dt = time.time() - t0
                 problems = check(case, out)
                 outs.append({"output": out, "problems": problems, "seconds": round(dt, 2)})
@@ -106,13 +107,15 @@ def main():
         res["memory"] = vram_split(o.url, model)
         res["avg_seconds"] = round(res["seconds"] / res["total"], 2)
         print(f"{model}: {res['passed']}/{res['total']} passed, avg {res['avg_seconds']}s, {res['memory']}")
-        o.unload(model)  # free VRAM for the next model
+        if not cloud:
+            o.unload(model)  # free VRAM for the next model
         results[model] = res
     if args.json:
         Path(args.json).write_text(json.dumps({"cases": CASES, "results": results}, indent=2), encoding="utf-8")
     if args.markdown:
         Path(args.markdown).write_text(markdown(models, results), encoding="utf-8")
-    o.warm_up(s["ollama_model"])  # leave the app's model loaded
+    if not s.cloud:
+        o.warm_up(s["ollama_model"])  # leave the app's model loaded
 
 
 def markdown(models, results):

@@ -1,10 +1,12 @@
 """Settings window."""
 import os
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 from .. import audio, autostart, hotkey
+from ..llm import OllamaError, is_cloud_model, is_local_url, start_signin
 from ..paths import TRAINING_DIR
 from ..settings import DEFAULT_SYSTEM_PROMPT
 from ..stt import WHISPER_SIZES
@@ -17,7 +19,7 @@ class SettingsWindow:
         win = self.win = tk.Toplevel(root)
         win.title("Voice to Replit - Settings")
         win.configure(bg=theme.BG)
-        theme.center(win, 760, 800)
+        theme.center(win, 780, 880)
         theme.dark_titlebar(win)
         win.bind("<Escape>", lambda e: win.destroy())
 
@@ -48,19 +50,48 @@ class SettingsWindow:
         ttk.Combobox(body, textvariable=self.device, values=["auto", "cuda", "cpu"], state="readonly",
                      width=7).grid(row=i, column=2, padx=(8, 0))
 
-        # Ollama: lists the models actually installed (queried from Ollama at runtime)
+        # Rewriting model: Local / Cloud toggle, then the models installed in Ollama (queried at runtime)
         self.ollama = ollama
-        self.installed: list[str] | None = None  # None = not loaded yet / Ollama offline
-        self.ollama_model = tk.StringVar(value=settings["ollama_model"])
+        self.installed: list[str] | None = None  # every model Ollama lists; None = not loaded yet / offline
+        self.mode = tk.StringVar(value=settings["llm_mode"])
+        self.choice = {"local": settings["ollama_model"], "cloud": settings["ollama_cloud_model"]}
+        self.signed_in: bool | None = None  # None = unknown / not checked (never checked in Local mode)
+        self._signin_job = 0
+        i = row("Rewriting runs")
+        mf = ttk.Frame(body)
+        mf.grid(row=i, column=1, columnspan=2, sticky="w")
+        ttk.Radiobutton(mf, text="Local (on this computer)", value="local", variable=self.mode,
+                        command=self._mode_changed).pack(side="left")
+        ttk.Radiobutton(mf, text="Cloud (Ollama cloud models)", value="cloud", variable=self.mode,
+                        command=self._mode_changed).pack(side="left", padx=(16, 0))
+
+        self.ollama_model = tk.StringVar(value=self.choice[self.mode.get()])
         i = row("Ollama model")
         self.ollama_box = ttk.Combobox(body, textvariable=self.ollama_model, values=[])
         self.ollama_box.grid(row=i, column=1, sticky="ew")
         ttk.Button(body, text="Refresh", command=self._refresh_models).grid(row=i, column=2, padx=(8, 0))
         self.model_status = tk.Label(body, text="Checking installed models...", bg=theme.BG, fg=theme.MUTED,
-                                     font=theme.FONT, anchor="w", justify="left")
+                                     font=theme.FONT, anchor="w", justify="left", wraplength=560)
         self.model_status.grid(row=r, column=1, columnspan=2, sticky="w")
         r += 1
         self.ollama_model.trace_add("write", lambda *_: self._show_model_status())
+
+        # Cloud-only: privacy warning and Ollama sign-in
+        self.cloud_warning = tk.Label(
+            body, bg=theme.BG, fg=theme.WARN, font=theme.FONT_BOLD, anchor="w", justify="left", wraplength=560,
+            text="⚠ Cloud models send your transcripts to external servers, may require an Ollama account "
+                 "sign-in, and may be subject to usage limits or costs. Your data leaves this computer.")
+        self.cloud_warning.grid(row=r, column=1, columnspan=2, sticky="w", pady=(4, 0))
+        self._cloud_rows = [self.cloud_warning]
+        r += 1
+        self.signin_frame = ttk.Frame(body)
+        self.signin_frame.grid(row=r, column=1, columnspan=2, sticky="w", pady=(4, 0))
+        self._cloud_rows.append(self.signin_frame)
+        r += 1
+        self.signin_label = tk.Label(self.signin_frame, text="", bg=theme.BG, fg=theme.MUTED, font=theme.FONT,
+                                     anchor="w", justify="left", wraplength=440)
+        self.signin_label.pack(side="left")
+        self.signin_btn = ttk.Button(self.signin_frame, text="Sign in", command=self._sign_in)
 
         # Temperature
         self.temperature = tk.DoubleVar(value=settings["temperature"])
@@ -71,6 +102,7 @@ class SettingsWindow:
                     format="%.2f").pack(side="left")
         ttk.Label(tf, text="0 = most literal (recommended 0.2), higher = more varied wording",
                   style="Muted.TLabel").pack(side="left", padx=(10, 0))
+        self._apply_mode()
         self._refresh_models()
 
         # Microphone
@@ -123,48 +155,145 @@ class SettingsWindow:
         ttk.Button(bar, text="Save", style="Accent.TButton", command=self._save).pack(side="right")
         ttk.Button(bar, text="Cancel", command=win.destroy).pack(side="right", padx=8)
 
-    def _refresh_models(self):
-        self.model_status.configure(text="Checking installed models...", fg=theme.MUTED)
-        result = {}
+    # ---------------------------------------------------------------- Local / Cloud
+    @property
+    def cloud(self) -> bool:
+        return self.mode.get() == "cloud"
 
-        def work():  # network call off the UI thread; never touches Tk
-            try:
-                result["names"] = [n.removesuffix(":latest") for n in self.ollama.models()]
-            except Exception:
-                result["names"] = None
+    def _run_async(self, work, done):
+        """Run work() on a thread and done(result) on the Tk thread, without touching Tk from the thread."""
+        box = {}
+        threading.Thread(target=lambda: box.setdefault("r", work()), daemon=True).start()
 
         def poll():
             if not self.win.winfo_exists():
                 return
-            if "names" not in result:
+            if "r" in box:
+                done(box["r"])
+            else:
                 self.win.after(100, poll)
-                return
-            self.installed = result["names"]
-            self.ollama_box.configure(values=sorted(self.installed) if self.installed else [])
-            self._show_model_status()
-
-        threading.Thread(target=work, daemon=True).start()
         self.win.after(100, poll)
 
+    def _mode_changed(self):
+        other = "local" if self.cloud else "cloud"
+        self.choice[other] = self.ollama_model.get().strip()  # remember the pick for the mode we left
+        self._apply_mode()
+        self.ollama_model.set(self.choice[self.mode.get()])
+
+    def _apply_mode(self):
+        for w in self._cloud_rows:
+            if self.cloud:
+                w.grid()
+            else:
+                w.grid_remove()
+        self._fill_dropdown()
+        if self.cloud:
+            self._check_signin()
+
+    def _fill_dropdown(self):
+        names = [n for n in (self.installed or []) if is_cloud_model(n) == self.cloud]
+        self.ollama_box.configure(values=sorted(names))
+        self._show_model_status()
+
+    def _refresh_models(self):
+        if not self.cloud and not is_local_url(self.ollama.url):
+            # Local mode never talks to anything but Ollama on this computer.
+            self.installed = None
+            self.model_status.configure(text=f"Local mode only talks to Ollama on this computer, but the Ollama "
+                                             f"address is {self.ollama.url}.", fg=theme.FAIL)
+            return
+        self.model_status.configure(text="Checking installed models...", fg=theme.MUTED)
+
+        def work():
+            try:
+                return [n.removesuffix(":latest") for n in self.ollama.models()]
+            except Exception:
+                return None
+
+        def done(names):
+            self.installed = names
+            self._fill_dropdown()
+
+        self._run_async(work, done)
+        if self.cloud:
+            self._check_signin()
+
     def _model_problem(self) -> str | None:
-        """None if the chosen model is installed, else a message saying how to fix it."""
+        """None if the chosen model can be used in the current mode, else a message saying how to fix it."""
         name = self.ollama_model.get().strip()
         if self.installed is None:
             return "Ollama isn't running, so installed models can't be listed. Start the Ollama app, then press Refresh."
+        if self.cloud and not any(is_cloud_model(n) for n in self.installed) and not name:
+            return ("No cloud models added yet. Add one in a terminal, e.g.:  ollama pull glm-5.3-flash:cloud   "
+                    "then press Refresh.")
         if not name:
             return "Choose a model from the list."
+        if not self.cloud and is_cloud_model(name):
+            return f"'{name}' is a cloud model. Switch to Cloud to use it, or pick a local model."
+        if self.cloud and not is_cloud_model(name):
+            return f"'{name}' is a local model. Switch to Local to use it, or pick a :cloud model."
         if name.removesuffix(":latest") not in self.installed:
             return f"'{name}' isn't installed. Run in a terminal:  ollama pull {name}   then press Refresh."
         return None
 
     def _show_model_status(self):
+        if self.installed is None and not self.cloud and not is_local_url(self.ollama.url):
+            return  # keep the "local only" message
         problem = self._model_problem()
         if problem:
             self.model_status.configure(text=problem, fg=theme.WARN if self.installed is None else theme.FAIL)
         else:
-            n = len(self.installed)
-            self.model_status.configure(text=f"✓ Installed  ({n} model{'s' if n != 1 else ''} available locally)",
+            n = len(self.ollama_box.cget("values"))
+            kind = "cloud" if self.cloud else "local"
+            self.model_status.configure(text=f"✓ Installed  ({n} {kind} model{'s' if n != 1 else ''} available)",
                                         fg=theme.OK)
+
+    def _check_signin(self):
+        """Ask the local Ollama whether it's signed in to ollama.com. Cloud mode only."""
+        if not self.cloud:
+            return
+        self._signin_job += 1
+        job = self._signin_job
+        self.signin_label.configure(text="Checking your Ollama sign-in...", fg=theme.MUTED)
+        self.signin_btn.pack_forget()
+
+        def done(result):
+            if job != self._signin_job or not self.cloud:
+                return
+            ok, who = result
+            self.signed_in = ok
+            if ok:
+                self.signin_label.configure(text=f"✓ Signed in to Ollama{' as ' + who if who else ''}.", fg=theme.OK)
+                self.signin_btn.pack_forget()
+            else:
+                self.signin_label.configure(
+                    text="Cloud models need a free Ollama account. You're not signed in.", fg=theme.WARN)
+                self.signin_btn.pack(side="left", padx=(10, 0))
+
+        self._run_async(self.ollama.signed_in, done)
+
+    def _sign_in(self):
+        try:
+            start_signin()
+        except OllamaError as e:
+            messagebox.showerror("Sign in", str(e), parent=self.win)
+            return
+        self.signin_label.configure(text="Follow the steps in the 'ollama signin' window (it shows a link to open "
+                                         "in your browser). Waiting for you to finish...", fg=theme.MUTED)
+        self.signin_btn.pack_forget()
+        self._wait_for_signin(deadline=time.time() + 300)
+
+    def _wait_for_signin(self, deadline):
+        def done(result):
+            if not self.cloud or not self.win.winfo_exists():
+                return
+            if result[0]:
+                self._check_signin()
+            elif time.time() < deadline:
+                self.win.after(3000, lambda: self._wait_for_signin(deadline))
+            else:
+                self._check_signin()
+        self._run_async(self.ollama.signed_in, done)
 
     def _open_training(self):
         TRAINING_DIR.mkdir(parents=True, exist_ok=True)
@@ -195,9 +324,17 @@ class SettingsWindow:
         if not model:
             messagebox.showerror("Ollama model", "Choose an Ollama model.", parent=self.win)
             return
+        if self.cloud != is_cloud_model(model):
+            messagebox.showerror("Ollama model", self._model_problem(), parent=self.win)
+            return
         problem = self._model_problem()
         if problem and not messagebox.askyesno("Ollama model", f"{problem}\n\nSave anyway?", parent=self.win):
             return
+        if self.cloud and self.signed_in is False and not messagebox.askyesno(
+                "Ollama sign-in", "You're not signed in to Ollama, so cloud models won't work yet.\n\nSave anyway?",
+                parent=self.win):
+            return
+        self.choice[self.mode.get()] = model
         try:
             temperature = round(min(1.0, max(0.0, float(self.temperature.get()))), 2)
         except (tk.TclError, ValueError):
@@ -207,7 +344,9 @@ class SettingsWindow:
         s["hotkey"] = hk
         s["whisper_model"] = self.whisper.get()
         s["whisper_device"] = self.device.get()
-        s["ollama_model"] = model
+        s["llm_mode"] = self.mode.get()
+        s["ollama_model"] = self.choice["local"]
+        s["ollama_cloud_model"] = self.choice["cloud"]
         s["temperature"] = temperature
         s["microphone"] = "" if self.mic.get() == "System default" else self.mic.get()
         s["auto_enter"] = self.auto_enter.get()

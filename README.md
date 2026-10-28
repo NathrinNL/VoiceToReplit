@@ -110,7 +110,8 @@ All settings are in the Settings window and in `%APPDATA%\VoiceToReplit\settings
 |---|---|---|
 | Hotkey | `Ctrl+Shift+X` | Click **Change…** and press a new combination. The app warns you if another program already uses it. |
 | Whisper model | from the system check | `tiny` → `large-v3`. Bigger is more accurate but slower. Device can be auto, cuda or cpu. |
-| Ollama model | `llama3.2` | The dropdown lists the models installed in Ollama. Click **Refresh** after pulling a new one. If the chosen model isn't installed, a red line shows the `ollama pull …` command to fix it. See [Choosing a model](#choosing-a-rewriting-model). |
+| Rewriting runs | **Local** | **Local / Cloud** toggle, remembered between sessions. See [Local vs Cloud](#local-vs-cloud-rewriting). Local and Cloud each remember their own model choice. |
+| Ollama model | `llama3.2` | The dropdown lists the models installed in Ollama for the selected mode. Click **Refresh** after pulling a new one. If the chosen model isn't installed, a red line shows the `ollama pull …` command to fix it. See [Choosing a model](#choosing-a-rewriting-model). |
 | Temperature | `0.2` | How varied the rewrite's wording is, from 0 to 1. Low values keep it literal and consistent. |
 | Rewriting prompt | built-in template | Editable, including its two examples. **Reset prompt to default** restores the original. |
 | Microphone | system default | |
@@ -123,6 +124,24 @@ All settings are in the Settings window and in `%APPDATA%\VoiceToReplit\settings
 - Settings, history (`history.json`), the log (`voice_to_replit.log`) and `system_check_report.txt` are in `%APPDATA%\VoiceToReplit\`
 - Whisper models are in `%LOCALAPPDATA%\VoiceToReplit\models\`
 - Ollama models are stored by Ollama itself
+
+## Local vs Cloud rewriting
+
+Settings has a **Local / Cloud** toggle above the model list. It defaults to **Local**.
+
+**Local** (the default) keeps everything on your PC:
+- Only installed models without `:cloud` in the name are listed.
+- The app only talks to Ollama on this computer (`localhost` / `127.0.0.1`). If the Ollama address in `settings.json` points anywhere else, the app refuses to use it.
+- If a `:cloud` model somehow ends up selected, it's refused before anything is sent.
+- The Ollama sign-in check never runs.
+
+**Cloud** uses Ollama's hosted models, such as `glm-5.3-flash:cloud` or `kimi-k3:cloud`:
+- Only `:cloud` models are listed. To add one, run `ollama pull <name>:cloud`, then click **Refresh**.
+- A warning is shown: *Cloud models send your transcripts to external servers, may require an Ollama account sign-in, and may be subject to usage limits or costs. Your data leaves this computer.*
+- Cloud models need a **free Ollama account**. If you aren't signed in, a **Sign in** button opens a window running `ollama signin`. Follow the link it shows, and Settings notices when you've finished.
+- The tray tooltip says "CLOUD rewriting" while Cloud mode is on.
+
+Speech-to-text (Whisper) always runs locally, whichever mode you choose. In Cloud mode, only the transcript text is sent to Ollama's servers, never the audio.
 
 ## Choosing a rewriting model
 
@@ -158,6 +177,7 @@ Each line is a JSON object with these fields:
 | `outcome` | One of the values below |
 | `audio_seconds` | How long you spoke (a number only; no audio is saved) |
 | `whisper_model`, `ollama_model` | The models used |
+| `llm_mode` | `local` or `cloud`: where the rewrite ran |
 | `transcript` | What Whisper heard |
 | `rewrites` | Every rewrite the AI produced, including Regenerate, in order |
 | `model_prompt` | The last AI rewrite shown to you |
@@ -291,4 +311,4 @@ You still need Ollama installed separately.
 
 ## Privacy
 
-Your audio, transcripts and prompts never leave your PC, apart from the prompts you choose to send to Replit. Audio is never saved to disk. The training log is off by default and, if you turn it on, it stays on your PC. The only other network use is the one-time model download, from Hugging Face (Whisper) and Ollama.
+In the default **Local** mode, your audio, transcripts and prompts never leave your PC, apart from the prompts you choose to send to Replit. If you switch to **Cloud** mode, your transcripts are sent to Ollama's servers for rewriting. Your audio never is. Audio is never saved to disk. The training log is off by default and, if you turn it on, it stays on your PC. The only other network use is the one-time model download, from Hugging Face (Whisper) and Ollama.

@@ -43,7 +43,8 @@ class Record:
         self.timestamp = now.isoformat(timespec="seconds")
         self.audio_seconds = round(audio_seconds, 2)
         self.whisper_model = settings["whisper_model"]
-        self.ollama_model = settings["ollama_model"]
+        self.ollama_model = settings.active_model
+        self.llm_mode = settings["llm_mode"]
         self.system_prompt = settings["system_prompt"]
         self.transcript = ""
         self.rewrites: list[str] = []
@@ -75,6 +76,7 @@ class Record:
             "whisper_model": self.whisper_model,
             "transcript": self.transcript,
             "ollama_model": self.ollama_model,
+            "llm_mode": self.llm_mode,
             "system_prompt_id": _prompt_id(self.system_prompt),
             "rewrites": self.rewrites,
             "model_prompt": model_prompt,

@@ -37,6 +37,29 @@ def _wrap(transcript: str) -> str:
             f'Transcript: "{transcript}"\nOutput:')
 
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+
+def is_cloud_model(name: str) -> bool:
+    """Ollama cloud models are tagged ':cloud' (older ones '<size>-cloud', e.g. 'gpt-oss:120b-cloud')."""
+    tag = name.strip().lower().partition(":")[2]
+    return tag == "cloud" or tag.endswith("-cloud")
+
+
+def start_signin() -> None:
+    """Open a console window running `ollama signin` so the user can follow its instructions."""
+    exe = find_ollama_exe()
+    if not exe:
+        raise OllamaError("Ollama is not installed. Download it from https://ollama.com/download.")
+    subprocess.Popen(["cmd", "/c", exe, "signin", "&", "echo.", "&", "pause"],
+                     creationflags=subprocess.CREATE_NEW_CONSOLE)
+
+
+def is_local_url(url: str) -> bool:
+    from urllib.parse import urlparse
+    return (urlparse(url).hostname or "").lower() in LOCAL_HOSTS
+
+
 def _same_model(a: str, b: str) -> bool:
     norm = lambda n: n if ":" in n else n + ":latest"
     return norm(a.strip()) == norm(b.strip())
@@ -78,18 +101,26 @@ class Ollama:
     def has_model(self, name: str) -> bool:
         return any(_same_model(m, name) for m in self.models())
 
-    def model_status(self, name: str) -> tuple[str, str]:
-        """('ok' | 'missing' | 'offline', message) for showing next to the model picker."""
-        name = name.strip()
+    def check_local_only(self) -> None:
+        """In Local mode the app may only talk to an Ollama server on this computer."""
+        if not is_local_url(self.url):
+            raise OllamaError(f"Local mode only talks to Ollama on this computer, but the Ollama address is "
+                              f"{self.url}. Set ollama_url to http://127.0.0.1:11434 in settings.json.")
+
+    def signed_in(self) -> tuple[bool, str]:
+        """(signed in?, account name or "") from the local Ollama server. Only call this in Cloud mode:
+        Ollama checks the account with ollama.com."""
         try:
-            installed = self.models()
+            r = requests.post(f"{self.url}/api/me", timeout=15)
         except requests.RequestException:
-            return "offline", "Ollama isn't running - start the Ollama app, then press Refresh."
-        if not name:
-            return "missing", "Choose a model."
-        if any(_same_model(m, name) for m in installed):
-            return "ok", "Installed"
-        return "missing", f"Not installed. Run in a terminal:  ollama pull {name}"
+            return False, ""
+        if r.ok:
+            try:
+                info = r.json()
+            except ValueError:
+                info = {}
+            return True, info.get("name") or info.get("email") or ""
+        return False, ""
 
     def capabilities(self, model: str) -> list[str]:
         if model not in self._caps:
@@ -114,7 +145,13 @@ class Ollama:
                     total, done = msg.get("total"), msg.get("completed")
                     progress(msg.get("status", ""), (done / total) if total and done else None)
 
-    def rewrite(self, transcript: str, model: str, system_prompt: str, temperature: float = 0.2) -> str:
+    def rewrite(self, transcript: str, model: str, system_prompt: str, temperature: float = 0.2,
+                cloud: bool = False) -> str:
+        if not cloud:
+            self.check_local_only()
+            if is_cloud_model(model):
+                raise OllamaError(f"'{model}' is a cloud model, which sends your transcript off this computer. "
+                                  "Switch to Cloud in Settings to use it, or pick a local model.")
         self.ensure_running()
         if not self.has_model(model):
             raise OllamaError(f"The Ollama model '{model}' is not installed. Run in a terminal:  ollama pull {model}\n"
@@ -133,6 +170,9 @@ class Ollama:
             r = requests.post(f"{self.url}/api/chat", json=body, timeout=180)
         except requests.RequestException as e:
             raise OllamaError(f"Could not reach Ollama: {e}") from e
+        if r.status_code == 401 and cloud:
+            raise OllamaError("Cloud models need a free Ollama account. Open Settings and click Sign in "
+                              "(or run:  ollama signin).")
         if not r.ok:
             raise OllamaError(f"Ollama returned an error: {r.text[:300]}")
         return clean_output(r.json()["message"]["content"])

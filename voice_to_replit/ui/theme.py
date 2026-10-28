@@ -50,6 +50,9 @@ def apply(root: tk.Tk) -> None:
     style.configure("TCheckbutton", background=BG, foreground=FG, indicatorbackground=FIELD,
                     indicatorforeground=FG)
     style.map("TCheckbutton", background=[("active", BG)], indicatorbackground=[("selected", ACCENT)])
+    style.configure("TRadiobutton", background=BG, foreground=FG, indicatorbackground=FIELD,
+                    indicatorforeground=FG)
+    style.map("TRadiobutton", background=[("active", BG)], indicatorbackground=[("selected", ACCENT)])
     style.configure("Treeview", background=FIELD, fieldbackground=FIELD, foreground=FG, rowheight=26,
                     borderwidth=0)
     style.map("Treeview", background=[("selected", ACCENT)])
