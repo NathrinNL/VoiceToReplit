@@ -2,6 +2,7 @@
 import ctypes
 import logging
 import os
+import re
 import time
 from dataclasses import dataclass
 
@@ -76,9 +77,22 @@ def find_replit_windows() -> list[WindowInfo]:
         return True
 
     win32gui.EnumWindows(cb, None)
+    # Real Replit pages are titled "<project> - Replit"; other pages merely mentioning Replit
+    # (docs, GitHub, this app's own repo) shouldn't trigger the "which window?" prompt.
+    strong = [w for w in found if _is_replit_title(w.title) or w.exe.lower() == "replit.exe"]
+    if strong:
+        found = strong
     # Prefer known browsers / the Replit app first.
     found.sort(key=lambda w: w.exe.lower() not in KNOWN_APPS)
     return found
+
+
+_BROWSER_SUFFIX = re.compile(r"\s+[-—–]\s+(Google Chrome|Microsoft​? Edge|Mozilla Firefox|Brave|Opera)\s*$", re.I)
+
+
+def _is_replit_title(title: str) -> bool:
+    page = _BROWSER_SUFFIX.sub("", title).strip()
+    return bool(re.search(r"[-—–|]\s*Replit$", page)) or page == "Replit"
 
 
 def window_rect(hwnd: int) -> list[int]:

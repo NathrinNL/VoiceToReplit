@@ -17,7 +17,7 @@ class SettingsWindow:
         win = self.win = tk.Toplevel(root)
         win.title("Voice to Replit - Settings")
         win.configure(bg=theme.BG)
-        theme.center(win, 720, 720)
+        theme.center(win, 760, 800)
         theme.dark_titlebar(win)
         win.bind("<Escape>", lambda e: win.destroy())
 
@@ -48,13 +48,30 @@ class SettingsWindow:
         ttk.Combobox(body, textvariable=self.device, values=["auto", "cuda", "cpu"], state="readonly",
                      width=7).grid(row=i, column=2, padx=(8, 0))
 
-        # Ollama
+        # Ollama: lists the models actually installed (queried from Ollama at runtime)
+        self.ollama = ollama
+        self.installed: list[str] | None = None  # None = not loaded yet / Ollama offline
         self.ollama_model = tk.StringVar(value=settings["ollama_model"])
         i = row("Ollama model")
-        self.ollama_box = ttk.Combobox(body, textvariable=self.ollama_model,
-                                       values=["llama3.2", "qwen2.5:3b", "qwen2.5:7b"])
+        self.ollama_box = ttk.Combobox(body, textvariable=self.ollama_model, values=[])
         self.ollama_box.grid(row=i, column=1, sticky="ew")
-        threading.Thread(target=self._load_models, args=(ollama,), daemon=True).start()
+        ttk.Button(body, text="Refresh", command=self._refresh_models).grid(row=i, column=2, padx=(8, 0))
+        self.model_status = tk.Label(body, text="Checking installed models...", bg=theme.BG, fg=theme.MUTED,
+                                     font=theme.FONT, anchor="w", justify="left")
+        self.model_status.grid(row=r, column=1, columnspan=2, sticky="w")
+        r += 1
+        self.ollama_model.trace_add("write", lambda *_: self._show_model_status())
+
+        # Temperature
+        self.temperature = tk.DoubleVar(value=settings["temperature"])
+        i = row("Temperature")
+        tf = ttk.Frame(body)
+        tf.grid(row=i, column=1, columnspan=2, sticky="w")
+        ttk.Spinbox(tf, textvariable=self.temperature, from_=0.0, to=1.0, increment=0.05, width=6,
+                    format="%.2f").pack(side="left")
+        ttk.Label(tf, text="0 = most literal (recommended 0.2), higher = more varied wording",
+                  style="Muted.TLabel").pack(side="left", padx=(10, 0))
+        self._refresh_models()
 
         # Microphone
         self.mic = tk.StringVar(value=settings["microphone"] or "System default")
@@ -106,14 +123,48 @@ class SettingsWindow:
         ttk.Button(bar, text="Save", style="Accent.TButton", command=self._save).pack(side="right")
         ttk.Button(bar, text="Cancel", command=win.destroy).pack(side="right", padx=8)
 
-    def _load_models(self, ollama):
-        try:
-            names = ollama.models()
-        except Exception:
-            return
-        merged = list(dict.fromkeys(n.removesuffix(":latest") for n in names))
-        merged += [m for m in ("llama3.2", "qwen2.5:3b", "qwen2.5:7b") if m not in merged]
-        self.win.after(0, lambda: self.ollama_box.configure(values=merged))
+    def _refresh_models(self):
+        self.model_status.configure(text="Checking installed models...", fg=theme.MUTED)
+        result = {}
+
+        def work():  # network call off the UI thread; never touches Tk
+            try:
+                result["names"] = [n.removesuffix(":latest") for n in self.ollama.models()]
+            except Exception:
+                result["names"] = None
+
+        def poll():
+            if not self.win.winfo_exists():
+                return
+            if "names" not in result:
+                self.win.after(100, poll)
+                return
+            self.installed = result["names"]
+            self.ollama_box.configure(values=sorted(self.installed) if self.installed else [])
+            self._show_model_status()
+
+        threading.Thread(target=work, daemon=True).start()
+        self.win.after(100, poll)
+
+    def _model_problem(self) -> str | None:
+        """None if the chosen model is installed, else a message saying how to fix it."""
+        name = self.ollama_model.get().strip()
+        if self.installed is None:
+            return "Ollama isn't running, so installed models can't be listed. Start the Ollama app, then press Refresh."
+        if not name:
+            return "Choose a model from the list."
+        if name.removesuffix(":latest") not in self.installed:
+            return f"'{name}' isn't installed. Run in a terminal:  ollama pull {name}   then press Refresh."
+        return None
+
+    def _show_model_status(self):
+        problem = self._model_problem()
+        if problem:
+            self.model_status.configure(text=problem, fg=theme.WARN if self.installed is None else theme.FAIL)
+        else:
+            n = len(self.installed)
+            self.model_status.configure(text=f"✓ Installed  ({n} model{'s' if n != 1 else ''} available locally)",
+                                        fg=theme.OK)
 
     def _open_training(self):
         TRAINING_DIR.mkdir(parents=True, exist_ok=True)
@@ -142,13 +193,22 @@ class SettingsWindow:
                 return
         model = self.ollama_model.get().strip()
         if not model:
-            messagebox.showerror("Ollama model", "Enter an Ollama model name.", parent=self.win)
+            messagebox.showerror("Ollama model", "Choose an Ollama model.", parent=self.win)
+            return
+        problem = self._model_problem()
+        if problem and not messagebox.askyesno("Ollama model", f"{problem}\n\nSave anyway?", parent=self.win):
+            return
+        try:
+            temperature = round(min(1.0, max(0.0, float(self.temperature.get()))), 2)
+        except (tk.TclError, ValueError):
+            messagebox.showerror("Temperature", "Temperature must be a number from 0 to 1.", parent=self.win)
             return
         s = self.s
         s["hotkey"] = hk
         s["whisper_model"] = self.whisper.get()
         s["whisper_device"] = self.device.get()
         s["ollama_model"] = model
+        s["temperature"] = temperature
         s["microphone"] = "" if self.mic.get() == "System default" else self.mic.get()
         s["auto_enter"] = self.auto_enter.get()
         s["system_prompt"] = self.prompt.get("1.0", "end").strip() or DEFAULT_SYSTEM_PROMPT

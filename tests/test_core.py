@@ -42,6 +42,31 @@ class CleanOutputTests(unittest.TestCase):
         raw = "```\nHere are the instructions:\n1. Do A.\n2. Do B.\n```"
         self.assertEqual(clean_output(raw), "1. Do A.\n2. Do B.")
 
+    def test_template_preamble_bold_and_thinking_removed(self):
+        raw = ("<think>The user wants...</think>\nSure! Here is the prompt:\n\n**Goal:** Rename the project.\n"
+               "**Features:**\n- Change the project name to \"X\".\n- Update the project name to \"X\" on Replit.")
+        self.assertEqual(clean_output(raw),
+                         'Goal: Rename the project.\nFeatures:\n- Change the project name to "X".')
+
+    def test_echoed_example_after_output_removed(self):
+        raw = 'Goal: Make it blue.\nFeatures:\n- Make the header blue.\n\nExample 3\nTranscript: "..."'
+        self.assertEqual(clean_output(raw), "Goal: Make it blue.\nFeatures:\n- Make the header blue.")
+
+    def test_empty_optional_sections_removed(self):
+        raw = ("Goal: Speed up the map.\n\nFeatures:\n- Make zooming faster.\n\nTech/Constraints:\n- None mentioned.\n"
+               "Notes: None")
+        self.assertEqual(clean_output(raw), "Goal: Speed up the map.\nFeatures:\n- Make zooming faster.")
+
+    def test_real_notes_kept(self):
+        raw = "Goal: X.\nFeatures:\n- Do X.\nNotes:\n- None of the colours were given."
+        self.assertEqual(clean_output(raw), raw)
+
+    def test_bullets_deduped_per_section(self):
+        raw = ("Goal: Add a footer.\nFeatures:\n- Add a footer with the text \"Acme\".\n"
+               "- Add a footer with the text \"Acme\".\nNotes:\n- Footer colour not given.")
+        self.assertEqual(clean_output(raw), 'Goal: Add a footer.\nFeatures:\n- Add a footer with the text "Acme".\n'
+                                            "Notes:\n- Footer colour not given.")
+
 
 class HotkeyTests(unittest.TestCase):
     def test_parse_modifiers_and_letter(self):
@@ -61,6 +86,17 @@ class HotkeyTests(unittest.TestCase):
         self.assertEqual(hotkey.pretty("<ctrl>+<shift>+x"), "Ctrl + Shift + X")
 
 
+class WindowTitleTests(unittest.TestCase):
+    def test_replit_titles(self):
+        from voice_to_replit.winutil import _is_replit_title
+        self.assertTrue(_is_replit_title("Nathrin Webpage - Replit"))
+        self.assertTrue(_is_replit_title("My App - Replit - Google Chrome"))
+        self.assertTrue(_is_replit_title("My App - Replit — Mozilla Firefox"))
+        self.assertTrue(_is_replit_title("My App - Replit - Microsoft​ Edge"))
+        self.assertFalse(_is_replit_title("NathrinNL/VoiceToReplit: Talk to the Replit Agent - Google Chrome"))
+        self.assertFalse(_is_replit_title("Replit Docs: Agent overview - Google Chrome"))
+
+
 class SettingsTests(unittest.TestCase):
     def test_old_default_prompt_is_upgraded(self):
         s = Settings({"system_prompt": OLD_SYSTEM_PROMPTS[0]})
@@ -71,6 +107,12 @@ class SettingsTests(unittest.TestCase):
 
     def test_unknown_keys_ignored(self):
         self.assertNotIn("bogus", Settings({"bogus": 1}).data)
+
+    def test_defaults(self):
+        s = Settings()
+        self.assertEqual((s["ollama_model"], s["temperature"]), ("llama3.2", 0.2))
+        for part in ("Goal:", "Features:", "Tech/Constraints:", "Notes:", "Example 1", "Example 2"):
+            self.assertIn(part, s["system_prompt"])
 
 
 class TrainingLogTests(unittest.TestCase):

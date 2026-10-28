@@ -88,11 +88,13 @@ class SelfTest:
 
     def stage_rewrite(self):
         t0 = time.time()
-        out = self.ollama.rewrite(SAMPLE_TRANSCRIPT, self.s["ollama_model"], self.s["system_prompt"])
+        out = self.ollama.rewrite(SAMPLE_TRANSCRIPT, self.s["ollama_model"], self.s["system_prompt"],
+                                  self.s["temperature"])
         low = out.lower()
         problems = []
-        if not out.lstrip().startswith("1"):
-            problems.append("not a numbered list")
+        uses_template = "Goal:" in self.s["system_prompt"]
+        if uses_template and not (out.lstrip().startswith("Goal:") and "Features:" in out):
+            problems.append("didn't follow the Goal/Features template")
         for w in ("login", "blue", "top right", "welcome back"):
             if w not in low:
                 problems.append(f"dropped '{w}'")

@@ -70,6 +70,38 @@ Nothing is ever sent to Replit until you click **Send to Replit**.
 
 The tray menu has **Settings**, **History** (your last 50 prompts, each of which can be resent through the Review window), **Run System Check**, **Recalibrate** and **Quit**.
 
+### What the rewritten prompt looks like
+
+By default, your speech is turned into this fixed template:
+
+```
+Goal: <one sentence>
+Features:
+- <each concrete thing you asked for>
+Tech/Constraints:
+- <only if you mentioned any>
+Notes:
+- <anything ambiguous>
+```
+
+For example, this rambling request:
+
+> so I want to add, um, a dark mode, you know, a toggle in the top right corner, and it should remember what you picked, like save it in local storage I think, and uh don't use any new libraries, just plain CSS, and oh also the footer text should say Made with love in Amsterdam
+
+becomes:
+
+```
+Goal: Add a dark mode toggle to the top right corner that saves its state in local storage.
+Features:
+- Add a dark mode toggle in the top right corner.
+- Save the toggle state in local storage.
+- Change the footer text to "Made with love in Amsterdam".
+Tech/Constraints:
+- Use plain CSS only; do not use any new libraries.
+```
+
+The rewrite never adds features you didn't mention. If Tech/Constraints or Notes would be empty, that section is left out. You can change the template and its examples in **Settings → Rewriting prompt**, and **Reset prompt to default** brings the original back.
+
 ## Settings
 
 All settings are in the Settings window and in `%APPDATA%\VoiceToReplit\settings.json`:
@@ -78,8 +110,9 @@ All settings are in the Settings window and in `%APPDATA%\VoiceToReplit\settings
 |---|---|---|
 | Hotkey | `Ctrl+Shift+X` | Click **Change…** and press a new combination. The app warns you if another program already uses it. |
 | Whisper model | from the system check | `tiny` → `large-v3`. Bigger is more accurate but slower. Device can be auto, cuda or cpu. |
-| Ollama model | `llama3.2` | Any model you've pulled, e.g. `qwen2.5:3b`, `qwen2.5:7b` |
-| Rewriting prompt | built in | Editable. **Reset prompt to default** restores the original. |
+| Ollama model | `llama3.2` | The dropdown lists the models installed in Ollama. Click **Refresh** after pulling a new one. If the chosen model isn't installed, a red line shows the `ollama pull …` command to fix it. See [Choosing a model](#choosing-a-rewriting-model). |
+| Temperature | `0.2` | How varied the rewrite's wording is, from 0 to 1. Low values keep it literal and consistent. |
+| Rewriting prompt | built-in template | Editable, including its two examples. **Reset prompt to default** restores the original. |
 | Microphone | system default | |
 | Press Enter after pasting | on | Turn it off if you'd rather press Enter yourself. |
 | Chat box position | — | Set with Recalibrate / F8. |
@@ -90,6 +123,24 @@ All settings are in the Settings window and in `%APPDATA%\VoiceToReplit\settings
 - Settings, history (`history.json`), the log (`voice_to_replit.log`) and `system_check_report.txt` are in `%APPDATA%\VoiceToReplit\`
 - Whisper models are in `%LOCALAPPDATA%\VoiceToReplit\models\`
 - Ollama models are stored by Ollama itself
+
+## Choosing a rewriting model
+
+Any model installed in Ollama works. To add one, run `ollama pull <name>`, then click **Refresh** in Settings and pick it from the list. Everything stays local and free.
+
+**Reference machine:** this project is developed and tested on an **NVIDIA RTX 3060 Laptop GPU with 6 GB of VRAM**. Whisper `large-v3-turbo` uses about 1.6 GB of that, and Windows itself uses some. That leaves roughly **3–3.5 GB for the rewriting model** if it's going to run entirely on the GPU, which is what keeps it fast.
+
+| Model | Size in VRAM | On a 6 GB GPU (with Whisper turbo loaded) | Notes |
+|---|---|---|---|
+| `llama3.2` (3B), the default | 2.6 GB | ✅ 100% GPU, ~0.7 s | The fastest. Occasionally drops a constraint or puts it in the wrong section. |
+| `qwen3.5:4b` | 3.1 GB | ✅ 100% GPU, ~1.3 s | **Best quality in our tests.** Thinking mode is switched off automatically. VRAM is nearly full (about 5.6 of 6 GB). |
+| `qwen2.5:3b` | 2.2 GB | ✅ 100% GPU, ~0.4 s | Fast, but tends to add steps you didn't ask for. |
+| `llama3.2:1b`, `qwen2.5:1.5b` | ~1–1.5 GB | ✅ | Only worth it on 4 GB GPUs or CPU-only PCs. They follow the template less reliably. |
+| 7–8B models (`qwen2.5:7b`, `llama3.1:8b`) | 4.7–5 GB | ⚠️ Won't fit alongside Whisper, so they spill to the CPU and take several seconds per rewrite | Only with a smaller Whisper model (`small`) or 8 GB+ of VRAM. |
+
+**Test results:** on three messy test transcripts, run 3 times each, **qwen3.5:4b passed 9/9** and **llama3.2 passed 7/9**. llama3.2 twice left out "don't use any new libraries". The side-by-side before/after outputs are in [docs/model-comparison.md](docs/model-comparison.md). You can rerun the comparison on your own PC with `tools/eval_rewrite.py`.
+
+Only one Ollama model fits on a 6 GB GPU at a time. When you switch models, the first rewrite takes a few extra seconds while Ollama swaps them.
 
 ## Training log
 
@@ -147,7 +198,7 @@ The **whisper** stage uses Windows' built-in text-to-speech to create a test sen
 1. **Hotkey:** a [pynput](https://github.com/moses-palmer/pynput) keyboard listener watches for the push-to-talk combination. It needs no admin rights. To detect conflicts, the app briefly calls `RegisterHotKey`, which fails if another program already owns the combination.
 2. **Recording:** while the hotkey is held, [sounddevice](https://python-sounddevice.readthedocs.io) records at the microphone's native rate, then resamples to 16 kHz mono.
 3. **Transcription:** faster-whisper runs `int8_float16` on CUDA, or `int8` on the CPU, with voice-activity filtering. The model is loaded at startup and stays loaded.
-4. **Rewriting:** the transcript goes to Ollama's `/api/chat` along with an editable system prompt and a few built-in worked examples. The model is kept loaded with `keep_alive: -1`. The output is cleaned up, and repeated items are removed.
+4. **Rewriting:** the transcript goes to Ollama's `/api/chat` along with the editable template prompt, which contains two worked examples. The settings are temperature 0.2 (adjustable) and a 512-token output limit, and thinking is switched off for reasoning models. The model is kept loaded with `keep_alive: -1`. The output is then cleaned up: any preamble, bold headings, echoed examples and leftover `<think>` text are removed, empty "None mentioned" sections are dropped, and duplicate bullets are merged.
 5. **Review:** a Tk window shows the transcript and the editable prompt.
 6. **Sending:** the app finds a window whose title contains "Replit" and brings it to the front. It checks the window still matches the calibrated position, clicks the saved chat-box point, pastes with Ctrl+V and optionally presses Enter. Then it restores the clipboard.
 
@@ -172,17 +223,18 @@ voice_to_replit/
   ui/                      dark theme, overlay, review / settings / history / system-check windows
 tests/                     fast unit tests (no mic, GPU or Ollama needed)
 tools/eval_rewrite.py      measures rewrite quality for one or more Ollama models
+docs/model-comparison.md   llama3.2 vs qwen3.5:4b, before/after outputs side by side
 ```
 
 ## Development
 
 ```
 .venv\Scripts\python.exe -m unittest discover -s tests -v       unit tests
-.venv\Scripts\python.exe tools\eval_rewrite.py llama3.2 qwen2.5:3b   compare rewrite quality
+.venv\Scripts\python.exe tools\eval_rewrite.py llama3.2 qwen3.5:4b --markdown report.md   compare models side by side
 .venv\Scripts\python.exe -m voice_to_replit --selftest          end-to-end stage checks
 ```
 
-If you change the rewriting prompt or the worked examples in `voice_to_replit/llm.py`, run `tools/eval_rewrite.py` before and after. Small local models are sensitive to prompt changes.
+If you change the default prompt in `voice_to_replit/settings.py`, or your own prompt in Settings, run `tools/eval_rewrite.py` before and after. Small local models are sensitive to prompt changes.
 
 ## Contributing
 
@@ -225,7 +277,7 @@ You still need Ollama installed separately.
 |---|---|
 | **"Ollama is not installed"** | Install it from ollama.com, then run `install.bat` again. |
 | **"Ollama … did not start"** | Open **Ollama** from the Start menu. The app normally starts it for you. |
-| **"Model '…' is not downloaded"** | Run `ollama pull llama3.2` (or your chosen model) in a terminal. |
+| **"The Ollama model '…' is not installed"** | Run `ollama pull <model>` in a terminal, as shown in the message, or pick an installed model in Settings. Click **Refresh** after pulling. |
 | **"No microphone found"** | Plug one in, then check Windows Settings → System → Sound → Input. |
 | **"The recording was silent"** | Pick the right microphone in Settings, and check it isn't muted (some headsets have a mute switch). |
 | **Hotkey does nothing** | Another app may use it. Change it in Settings, which warns about conflicts. |

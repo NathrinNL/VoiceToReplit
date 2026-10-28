@@ -39,6 +39,8 @@ def apply(root: tk.Tk) -> None:
     style.configure("Accent.TButton", background=ACCENT, foreground="white", font=FONT_BOLD)
     style.map("Accent.TButton", background=[("active", ACCENT_HOVER), ("disabled", PANEL)])
     style.configure("TEntry", fieldbackground=FIELD, foreground=FG, insertcolor=FG, padding=4)
+    style.configure("TSpinbox", fieldbackground=FIELD, foreground=FG, background=FIELD, arrowcolor=FG,
+                    insertcolor=FG, padding=4)
     style.configure("TCombobox", fieldbackground=FIELD, foreground=FG, background=FIELD, arrowcolor=FG, padding=4)
     style.map("TCombobox", fieldbackground=[("readonly", FIELD)], foreground=[("readonly", FG)],
               selectbackground=[("readonly", FIELD)], selectforeground=[("readonly", FG)])

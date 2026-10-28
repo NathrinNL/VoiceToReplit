@@ -185,7 +185,7 @@ class App:
             if record:
                 record.transcript = transcript
             self.post(self.overlay.show, "Rewriting prompt...", "busy")
-            prompt = self.ollama.rewrite(transcript, s["ollama_model"], s["system_prompt"])
+            prompt = self.ollama.rewrite(transcript, s["ollama_model"], s["system_prompt"], s["temperature"])
             if record:
                 record.add_rewrite(prompt)
             self.post(self._processed, transcript, prompt, None, record)
@@ -246,7 +246,8 @@ class App:
     def _regenerate(self, rw: ReviewWindow):
         def work():
             try:
-                p = self.ollama.rewrite(rw.transcript, self.settings["ollama_model"], self.settings["system_prompt"])
+                s = self.settings
+                p = self.ollama.rewrite(rw.transcript, s["ollama_model"], s["system_prompt"], s["temperature"])
                 if rw.record:
                     rw.record.add_rewrite(p)
                 self.post(lambda: rw.alive and (rw.set_prompt(p), rw.set_busy(False)))
